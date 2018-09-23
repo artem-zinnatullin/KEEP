@@ -1,4 +1,4 @@
-# Encapsulate successful or failed function execution 
+# Encapsulate ok or error result of a function execution
 
 * **Type**: Standard Library API proposal
 * **Author**: Roman Elizarov
@@ -9,18 +9,18 @@
 
 ## Summary
 
-Kotlin language provides exceptions that are used to represent an arbitrary failure of a function and include 
-ability to attach additional information pertaining to this failure. Exceptions are sequential in nature and work 
+Kotlin language provides exceptions that are used to represent an arbitrary error of a function execution and include
+ability to attach additional information pertaining to this error. Exceptions are sequential in nature and work
 great in any kind of sequential code, including code for a single coroutine or in other case where one piece 
-of work in being sequentially decomposed. Exceptions ensure that the first failure in a sequentially performed work
+of work in being sequentially decomposed. Exceptions ensure that the first error in a sequentially performed work
 stops further progress and is propagated up to the caller. However, sequential nature of exceptions
 complicates their use in cases where some kind of parallel decomposition of work is needed or multiple
-failures need to be retained for later processing. 
+errors need to be retained for later processing.
 
-We'd like to introduce a type in the Kotlin standard library that is effectively a discriminated union between successful
-and failed outcome of execution of Kotlin function &mdash; `Success T | Failure Throwable`, 
-where `Success T` represents a successful result of some type `T` 
-and `Failure Throwable` represents a failure with any `Throwable` exception. 
+We'd like to introduce a type in the Kotlin standard library that is effectively a discriminated union between ok
+and error outcome of execution of Kotlin function &mdash; `Ok T | Er Throwable`,
+where `Ok T` represents an ok result of some type `T`
+and `Er Throwable` represents an error with any `Throwable` exception.
 For the purpose of efficiency, we would model it as a generic `inline class Result<T>` 
 in the standard library. 
 
@@ -36,8 +36,8 @@ This section lists motivating use-cases.
 ### Continuation and similar callbacks
 
 The primary driver for inclusion of this class into the Standard Library is `Continuation<T>` callback interface
-that should get invoked on the successful or failed execution of an asynchronous operation.
-We'd like to be able to have only a single function with "success or failure" union type as its parameter:
+that should get invoked on the ok or error execution of an asynchronous operation.
+We'd like to be able to have only a single function with "Ok or Er" union type as its parameter:
 
 ```kotlin
 interface Continuation<in T> {
@@ -48,24 +48,24 @@ interface Continuation<in T> {
 ### Asynchronous parallel decomposition
 
 Another example here is parallel execution of multiple asynchronous operations that must capture 
-successful or failed execution of each individual piece to analyze and reach decision on the outcome of a 
+ok or error execution result of each individual piece to analyze and reach decision on the outcome of a
 larger piece of work:
 
 ```kotlin
 val deferreds: List<Deferred<T>> = List(n) { 
     async { 
-        /* Do something that produces T or fails */ 
+        /* Does something that produces T or errors out. */
     } 
 }
-val outcomes1: List<T> = deferreds.map { it.await() } // BAD -- crash on the first (by index) failure
-val outcomes2: List<T> = deferreds.awaitAll() // BAD -- crash on the earliest (by time) failure 
+val outcomes1: List<T> = deferreds.map { it.await() } // BAD -- crash on the first (by index) error
+val outcomes2: List<T> = deferreds.awaitAll() // BAD -- crash on the earliest (by time) error
 val outcomes3: List<Result<T>> = deferreds.map { runCatching { it.await() } } // !!! <= THIS IS THE ONE WE WANT  
 ```     
 
-### Functional bulk manipulation of failures
+### Functional bulk manipulation of errors
 
-Kotlin encourages writing code in a functional style. It works well as long as business-specific failures are
-represented with nullable types or sealed class hierarchies, while other kinds of failures 
+Kotlin encourages writing code in a functional style. It works well as long as business-specific errors are
+represented with nullable types or sealed class hierarchies, while other kinds of errors
 (that are represented by exceptions) do not require any special local handling. However, when interfacing with
 Java-style APIs that rely heavily on exceptions or otherwise having a need to somehow process exceptions locally
 (as opposed to propagating them up the call stack), we see a clear lack of primitives in the Kotlin standard library.
@@ -77,9 +77,9 @@ list of results. We are given the following function to read single file content
 fun readFileData(file: File): Data
 ```
 
-This reading function throws exception if file is not found or parsing of a file had somehow failed. Normally that would
-be fine and the first failure of this kind would terminate the whole program with a stacktrace and explanatory message. 
-However, for `readFiles` we'd explicitly like to be able to continue after the failure to collect and report all failures.
+This reading function throws exception if file is not found or parsing of a file had somehow errored. Normally that would
+be fine and the first error of this kind would terminate the whole program with a stacktrace and explanatory message.
+However, for `readFiles` we'd explicitly like to be able to continue after the error to collect and report all errors.
 Moreover, we'd like to be able to have a functional implementation of `readFiles` like this:
 
 ```kotlin
@@ -91,19 +91,19 @@ fun readFilesCatching(files: List<File>): List<Result<Data>> =
     }
 ```
 
-> This function is named `readFileCatching` to make it explicit to the caller that all encountered failures
-were _caught_ and encapsulated in `Result` and it is caller responsibility to process these failures.
+> This function is named `readFileCatching` to make it explicit to the caller that all encountered errors
+were _caught_ and encapsulated in `Result` and it is caller responsibility to process these errors.
 
 Now, consider making some transformation of `readFilesCatching` results that we'd like to express functionally, 
-while preserving accumulated failures:
+while preserving accumulated errors:
 
 ```kotlin                                                     
 readFilesCatching(files).map { result: Result<Data> -> // type explicitly written here for clarity
-    result.map { it.doSomething() } // Operates on Success case, while preserving Failure
+    result.map { it.doSomething() } // Operates on `Ok` case, while preserving `Er`
 }
 ```
 
-If `doSomething`, in turn, can potentially fail and we are interested in keeping this failure per each individual
+If `doSomething`, in turn, can potentially error out and we are interested in keeping this error per each individual
 file, then we can write it using `mapCatching` instead of `map`:
 
 ```kotlin
@@ -147,9 +147,9 @@ doSomethingAsync()
 ```
 
 > It is closer to direct style, since this `doSomethingAsync` invocation actually starts performing operation, but 
-we also see that ultimate processing of success or failure is performed via chaining.  
+we also see that ultimate processing of `Ok` or `Er` is performed via chaining.
 
-Now, if `doSomethingSync` is a synchronous function, then handling its success or failure looks quite visually different,
+Now, if `doSomethingSync` is a synchronous function, then handling its `Ok` or `Er` looks quite visually different,
 which is problematic for the code that mixes both approaches:
 
 ```kotlin
@@ -169,13 +169,13 @@ Instead, we'd like to be able to write the same code in a more functional way:
 
 ```kotlin
 runCatching { doSomethingSync() }
-    .onFailure { showErrorDialog(it) }
-    .onSuccess { processData(it) }
+    .onEr { showErrorDialog(it) }
+    .onOk { processData(it) }
 ```
 
 ## Alternatives
 
-There is a number of community-supported libraries that provide this kind of success or failure union type, 
+There is a number of community-supported libraries that provide this kind of ok or error union type,
 but we cannot use any of them for the `Continuation` callback interface that is defined in the Standard Library.
 
 ### Continuation alternative
@@ -195,12 +195,12 @@ This solution was tried in experimental version of coroutines and the following 
 
 * All implementations have to implement both methods and there is no easy shortcut to provide a builder with
   a lambda like `Continuation { ... body ... }`.
-* Some implementations need to capture "success or failure" in their state and pass on captured success or failure
+* Some implementations need to capture "`Ok` or `Er`" in their state and pass on captured `Ok` or `Er`
   to another delegate continuation at a later time.
-* Some implementations have a common piece of logic that should be executed on both success and failure 
-  with minor differences for successful and failed cases. These implementations have to immediately forward both
+* Some implementations have a common piece of logic that should be executed on both `Ok` and `Er`
+  with minor differences for ok and error cases. These implementations have to immediately forward both
   `resume` and `resumeWithException` to some internal function like `doResume`, thus increasing stack size and still
-  forcing implementor to figure out a way to represent both success and failure in one method.    
+  forcing implementor to figure out a way to represent both `Ok` and `Er` in one method.
 
 **One method with two parameters**:
 
@@ -217,7 +217,7 @@ a clear indication of intent to have only one of them set.
 
 ```kotlin
 interface Continuation<in T> {
-    fun resume(result: Any?) // result: T | Failure(Throwable)
+    fun resume(result: Any?) // result: T | Er(Throwable)
 }
 ```  
 
@@ -248,14 +248,14 @@ If the result of `doSomethingSync` is nullable, then one possible alternative is
 
 ```kotlin
 var data: Data? = null
-val success = try { 
+val ok = try {
         data = doSomethingSync()
         true 
     } catch(e: Throwable) { 
         showErrorDialog(e)
         false 
     }
-if (success)    
+if (ok)
     processData(data) 
 ```
 
@@ -265,14 +265,14 @@ The following snippet gives summary of all the public APIs:
 
 ```kotlin
 class Result<out T> /* internal constructor */ {
-    val isSuccess: Boolean
-    val isFailure: Boolean
+    val isOk: Boolean
+    val isEr: Boolean
     fun getOrNull(): T?
     fun exceptionOrNull(): Throwable?
     
     companion object {
-        fun <T> success(value: T): Result<T>
-        fun <T> failure(exception: Throwable): Result<T>
+        fun <T> ok(value: T): Result<T>
+        fun <T> er(exception: Throwable): Result<T>
     }
 }
 
@@ -282,8 +282,8 @@ inline fun <T, R> T.runCatching(block: T.() -> R): Result<R>
 fun <T> Result<T>.getOrThrow(): T
 fun <R, T : R> Result<T>.getOrDefault(defaultValue: R): R
 
-inline fun <R, T : R> Result<T>.getOrElse(onFailure: (exception: Throwable) -> R): R
-inline fun <R, T> Result<T>.fold(onSuccess: (value: T) -> R, onFailure: (exception: Throwable) -> R): R
+inline fun <R, T : R> Result<T>.getOrElse(onEr: (exception: Throwable) -> R): R
+inline fun <R, T> Result<T>.fold(onOk: (value: T) -> R, onEr: (exception: Throwable) -> R): R
 
 inline fun <R, T> Result<T>.map(transform: (value: T) -> R): Result<R>
 inline fun <R, T: R> Result<T>.recover(transform: (exception: Throwable) -> R): Result<R>
@@ -291,8 +291,8 @@ inline fun <R, T: R> Result<T>.recover(transform: (exception: Throwable) -> R): 
 inline fun <R, T> Result<T>.mapCatching(transform: (value: T) -> R): Result<R>
 inline fun <R, T: R> Result<T>.recoverCatching(transform: (exception: Throwable) -> R): Result<R>
 
-inline fun <T> Result<T>.onSuccess(action: (value: T) -> Unit): Result<T>
-inline fun <T> Result<T>.onFailure(action: (exception: Throwable) -> Unit): Result<T>
+inline fun <T> Result<T>.onOk(action: (value: T) -> Unit): Result<T>
+inline fun <T> Result<T>.onEr(action: (exception: Throwable) -> Unit): Result<T>
 ```
 
 All of the functions have self-explanatory consistent names that follow established tradition in Kotlin Standard library
@@ -302,15 +302,15 @@ and establish the following additional conventions:
   with explicit `OrThrow` suffix like `getOrThrow`.
 * Functions that capture thrown exception and encapsulate it into `Result` instance are named 
   with explicit `Catching` suffix like `runCatching` and `mapCatching`.
-* A traditional `map` transformation function that works on successful cases 
+* A traditional `map` transformation function that works on Ok cases
   is augmented with a `recover` function that similarly transforms exceptional cases. 
-  A failure inside either `map` or `recover` transform aborts operation like a traditional function, 
-  but `mapCatching` and `recoverCatching` encapsulate failure in transform into the resulting `Result`.
-* Functions to query the case are naturally named `isSuccess` and `isFailure`. 
-* Functions that act on the success or failure cases are named `onSuccess` and `onFailure` and return their receiver
+  An error inside either `map` or `recover` transform aborts operation like a traditional function,
+  but `mapCatching` and `recoverCatching` encapsulate error in transform into the resulting `Result`.
+* Functions to query the case are naturally named `isOk` and `isEr`.
+* Functions that act on the `Ok` or `Er` cases are named `onOk` and `onEr` and return their receiver
   unchanged for further chaining according to tradition established by `onEach` extension from the Standard Library.  
   
-String representation of the `Result` value (`toString`) is either `Success(v)` or `Failure(x)` where `v` and `x` are 
+String representation of the `Result` value (`toString`) is either `Ok(v)` or `Er(x)` where `v` and `x` are
 the string representations of the corresponding value and exception. `equals` and `hashCode` are implemented 
 naturally for the result type, comparing the corresponding values or exceptions.
 
@@ -370,20 +370,20 @@ See [Future advancements](#future-advancements) for details.
 
 ## Binary contract and implementation details
 
-`Result<T>` is implemented by an `inline class` and is optimized for a successful case. Success is stored as
-a value of type `T` directly, without additional boxing, while failure exception is wrapped into an internal 
-`Result.Failure` class that is not exposed through binary interface and may be changed later. 
+`Result<T>` is implemented by an `inline class` and is optimized for an `Ok` case. `Ok` is stored as
+a value of type `T` directly, without additional boxing, while error is wrapped into an internal
+`Result.Er` class that is not exposed through binary interface and may be changed later.
 
 `Result` class has the following internal published APIs that 
 represent its binary interface on JVM in addition to its public [API](#api-details):
 
 ```kotlin
 inline class Result<out T> @PublishedApi internal constructor(
-    @PublishedApi internal val value: Any? // internal value -- either T or Failure
+    @PublishedApi internal val value: Any? // internal value -- either T or Er
 ) : Serializable
 
-@PublishedApi internal fun createFailure(exception: Throwable): Any
-@PublishedApi internal fun Result<*>.throwOnFailure()
+@PublishedApi internal fun createEr(exception: Throwable): Any
+@PublishedApi internal fun Result<*>.throwOnEr()
 ```  
 
 ## Error-handling style and exceptions
@@ -391,10 +391,10 @@ inline class Result<out T> @PublishedApi internal constructor(
 The `Result` class is not designed to be used directly as the result type of general functions and
 such use produces an error (see [Limitations](#limitations)). 
 
-In general, if some API requires its callers to handle failures locally (immediately around or next to the invocation), 
-then it should use nullable types, when these failures do not carry additional business meaning, 
-or domain-specific data types to represent its successful results and failures with any additional business-related
-data that is needed to process these failures.  
+In general, if some API requires its callers to handle errors locally (immediately around or next to the invocation),
+then it should use nullable types, when these errors do not carry additional business meaning,
+or domain-specific data types to represent its ok results and errors with any additional business-related
+data that is needed to process these errors.
 
 Consider this hypothetical API design:
 
@@ -402,14 +402,14 @@ Consider this hypothetical API design:
 fun findUserByName(name: String): Result<User> // ERROR 
 ```
 
-If the only kind of failure we might be interested in handling is the failure to find 
+If the only kind of error we might be interested in handling is the error to find
 the user with the given name, then the following signature shall be used:
 
 ```kotlin
 fun findUserByName(name: String): User? // Ok
 ```   
    
-If there is a business need to distinguish different failures and process these different failures in distinct ways
+If there is a business need to distinguish different errors and process these different errors in distinct ways
 on each invocation site, then the following kind of signature shall be considered:
 
 ```kotlin
@@ -423,12 +423,12 @@ sealed class FindUserResult {
 fun findUserByName(name: String): FindUserResult
 ```
 
-_Exceptions_ in Kotlin are designed for the failures that usually do not require local handling at each call site.
+_Exceptions_ in Kotlin are designed for the errors that usually do not require local handling at each call site.
 This includes several broad areas &mdash; logic and programming errors like index bounds problems and various checks
 for internal invariants and preconditions, environment problems, out of memory conditions, etc. 
-These failures are usually non-recoverable (or are not supposed to be recovered from) and are handled in some 
+These errors are usually non-recoverable (or are not supposed to be recovered from) and are handled in some
 centralized way by logging or otherwise reporting them for troubleshooting, typically terminating application
-or, sometimes, attempting to restart or to reinitialize an application as a whole or just its failing subsystem.       
+or, sometimes, attempting to restart or to reinitialize an application as a whole or just its errored subsystem.
 This is where default exceptions behaviour to abort current operation and propagate it up the call stack comes in handy. 
 
 External environment problems like network or file input/output errors represent a corner case here. 
@@ -441,9 +441,9 @@ These errors often require some specific user-interaction and can require domain
 additional metadata, like stack trace and message to aid in debugging. They are extremely valuable when this 
 metadata is written to the log for developers to aid in troubleshooting, but all that metadata is useless if
 exception is to be consumed by some business-logic to make some business-decision based simple on the presence of 
-exception. Use nullable types or domain-specific classes to represent failures that need specific handling.
+exception. Use nullable types or domain-specific classes to represent errors that need specific handling.
 
-So, in case when `findUserByName` failure does not require local handling by the caller, then its failure 
+So, in case when `findUserByName` error does not require local handling by the caller, then its error
 should be represented by exception and its signature should look like this:
 
 ```kotlin
@@ -452,18 +452,18 @@ fun findUserByName(name: String): User
 
 > This signature is fine if we always sure that user shall be found, unless we have bugs, environment or IO issues.
 
-If invoker of this function wants to perform multiple operations and process their failures afterwards
-(without aborting on the first failure), it can always use `runCatching { findUserByName(name) }` 
-to make it explicit that a failure is being caught and
+If invoker of this function wants to perform multiple operations and process their errors afterwards
+(without aborting on the first error), it can always use `runCatching { findUserByName(name) }`
+to make it explicit that an error is being caught and
 encapsulated into `Result` instance. 
 
 ## Similar API review
 
 Kotlin Standard Library provides rich collection of transformations for nullable types that are idiomatic in Kotlin
-to indicate failure when no additional information about the failure is needed. However, there is no build-in support
+to indicate error when no additional information about the error is needed. However, there is no build-in support
 for non-standard exception handling in the Standard Library -- exceptions always terminate operation and propagate to the caller.
 
-Other programming languages include a similar facility to represent a union of success and failure in their standard 
+Other programming languages include a similar facility to represent a union of ok or error in their standard
 library with the following names:
 
 * [`Try[T]`](https://www.scala-lang.org/api/current/scala/util/Try.html) in Scala is similar to the proposed `Result<T>`.
@@ -506,7 +506,7 @@ following problems:
 * It leads to abuse in cases where a user-provided API-specific sealed class would work better.   
 
 It is possible to define a separate class like `ResultEx<T, E>` that is parametrized by 
-both successful type `T` and failed type `E` (that must extend `Throwable`)
+both ok type `T` and error type `E` (that must extend `Throwable`)
 and then define `Result<T>` and a `typealias` to `ResultEx<T, Throwable>`.
 However, this creates its own problems:
 
@@ -530,7 +530,7 @@ of functions applicable to `Result`. We don't have sufficient motivating use-cas
 Using `Result` as the return type of `Catching` functions poses a problem that it might accidentally get lost, 
 thus losing unhandled exception. 
 
-Consider this code from [Functional bulk manipulation of failures](#functional-bulk-manipulation-of-failures):
+Consider this code from [Functional bulk manipulation of errors](#functional-bulk-manipulation-of-errors):
 
 ```kotlin                                                     
 readFilesCatching(files).map { result ->
@@ -547,7 +547,7 @@ work and and whether it is really a big problem after all.
 ### Additional APIs for collections
 
 API for `Result` class is designed to be quite bare-bones.
-However, according to [Functional bulk manipulation of failures](#functional-bulk-manipulation-of-failures) use-case,
+However, according to [Functional bulk manipulation of errors](#functional-bulk-manipulation-of-errors) use-case,
 one might occasionally encounter `List<Result<T>>` or another collection of `Result` instances. 
 It is open question whether we should provide additional extensions in the Standard Library to represent common
 operations on such collections and what those operations might be. 
@@ -565,20 +565,20 @@ If that is supported in the future, then we could change implementation of
 
 ```kotlin
 sealed inline class Result<T> {
-    inline class Success<T>(val value: T) : Result<T>()
-    class Failure<T>(val exception: Throwable) : Result<T>()
+    inline class Ok<T>(val value: T) : Result<T>()
+    class Er<T>(val exception: Throwable) : Result<T>()
 }
 ``` 
 
-> Notice, that only `Success` case is marked with `inline` modifier here. That is the case that should be
+> Notice, that only `Ok` case is marked with `inline` modifier here. That is the case that should be
 represented without boxing. In general, if `inline sealed` classes are allowed in the future,
 then Kotlin compiler could only support `inline` modifier on a set of subclasses with pairwise non-intersecting 
-types of their primary constructor properties. In particular, both `Success` and `Failure` cannot be `inline` 
-at the same time, since we would not be able to distinguish `Success(Exception(...))` from 
-`Failure(Exception(...))` at run time.
+types of their primary constructor properties. In particular, both `Ok` and `Er` cannot be `inline`
+at the same time, since we would not be able to distinguish `Ok(Exception(...))` from
+`Er(Exception(...))` at run time.
 
-These changes would make it possible to use `result is Success` and `result is Failure` expressions and get advantage of
-smart casts instead of `result.isSuccess` and `result.isFailure` that are currently provided and which do not work 
+These changes would make it possible to use `result is Ok` and `result is Er` expressions and get advantage of
+smart casts instead of `result.isOk` and `result.isEr` that are currently provided and which do not work
 with smart casts.
 
 ### Parameterizing by the base error type
@@ -594,7 +594,7 @@ the base class for caught exceptions. For example, in input/output code there ma
 
 Kotlin nullable types have extensive support in Kotlin via operators `?.`, `?:`, `!!`, and `T?` type constructor
 syntax. We can envision better integration of `Result` into the Kotlin language in the future.
-However, unlike nullable types, that are often used to represent _non signalling_ failure that does not cary
+However, unlike nullable types, that are often used to represent _non signalling_ error that does not cary
 additional information, `Result` instances also carry additional information and, in general, shall be
 always handled in some way. Making `Result` an integral part of the language also requires a 
 considerable effort on improving Kotlin type system to ensure proper handling of encapsulated exceptions.
@@ -674,7 +674,7 @@ uses monad comprehension over `Try` monad
 ```scala
 def getURLContent(url: String): Try[Iterator[String]] =
   for {
-    url <- parseURL(url) // here parseURL returns Try[URL], encapsulates failure
+    url <- parseURL(url) // here parseURL returns Try[URL], encapsulates error
     connection <- Try(url.openConnection())
     input <- Try(connection.getInputStream)
     source = Source.fromInputStream(input)
@@ -682,11 +682,11 @@ def getURLContent(url: String): Try[Iterator[String]] =
 ```
 
 Adapting functions used here to Kotlin style, one can write this code in Kotlin, 
-with the same semantics of aborting further progress on the first failure, in the following way:
+with the same semantics of aborting further progress on the first error, in the following way:
 
 ```kotlin
 fun getURLContent(url: String): List<String> {
-    val url = parseURL(url) // here parseURL returns URL, throws on failure
+    val url = parseURL(url) // here parseURL returns URL, throws on error
     val connection = url.openConnection()
     val input = connection.getInputStream()
     val source = Source.fromInputStream(input)
@@ -696,33 +696,33 @@ fun getURLContent(url: String): List<String> {
 
 Notice, that monad comprehension over `Try` monad is basically built into the Kotlin language.
 That is how imperative control flow works in Kotlin out of the box and there is no need to emulate it
-via monad comprehensions. If callers of this function need an encapsulated failure,
+via monad comprehensions. If callers of this function need an encapsulated error,
 they can always use `runCatching { getURLContent(url) }` expression.
 
 However, the Kotlin is not exactly equivalent to the initial code with `Try`.
 Let us see what are the differences. The original `parseURL` have been returning an encapsulated exception
 and it could be making a _fine grained_ decision on which kinds of exceptions shall be encapsulated into the result
-and which kinds of exceptions shall be thrown. Rewritten code propagates any failure in `parseURL` up to the caller 
-without this fine grained distinction between different kinds of failures. There is also a subtle difference on
-the `fromInputStream` invocation. Original code would fail with exception if this invocation fails, while any failure
+and which kinds of exceptions shall be thrown. Rewritten code propagates any error in `parseURL` up to the caller
+without this fine grained distinction between different kinds of errors. There is also a subtle difference on
+the `fromInputStream` invocation. Original code crash with exception if this invocation errors, while any error
 in `openConnection` and `getInputStream` is encapsulated into the result of the function via `Try`. Rewritten code 
-does not make distinctions between different kinds of failures anymore.
+does not make distinctions between different kinds of errors anymore.
 
 All in all, the differences can be summarized as follows. `Result` is a blunt tool designed to catch
-any failure in the function invocation for the processing later on.
+any error in the function invocation for the processing later on.
 On the other hand, libraries like [Arrow](https://arrow-kt.io) provide utility classes like `Try` and the 
 corresponding extension functions that enable more fine-grained control. When a function is declared with `Try<T>`
-as its result type, it means that this function can make a fine-grained decision on which failures are encapsulated
-and which failures are thrown up the call stack.       
+as its result type, it means that this function can make a fine-grained decision on which errors are encapsulated
+and which errors are thrown up the call stack.
 
 If your code needs fine-grained exception handling policy, we'd recommend to design your code in such a way, that
-exceptions are not used at all for any kinds of locally-handled failures 
+exceptions are not used at all for any kinds of locally-handled errors
 (see section on [style](#error-handling-style-and-exceptions) for example code
 with nullable types and sealed data classes). In the context of this appendix, `parseURL` could return a nullable
-result (of type `URL?`) to indicate parsing failure or return its own purpose-designed sealed class that would provide 
-all the additional details about failure (like the exact failure position in input string) 
+result (of type `URL?`) to indicate parsing error or return its own purpose-designed sealed class that would provide
+all the additional details about error (like the exact error position in input string)
 if that is needed for some business function 
-(like setting cursor to the place of failure in the user interface).
-In cases when you need to distinguish between different kinds of failures and these approaches do not work for you, 
+(like setting cursor to the place of error in the user interface).
+In cases when you need to distinguish between different kinds of errors and these approaches do not work for you,
 you are welcome to write your own utility libraries or use libraries like [Arrow](https://arrow-kt.io) 
 that provide the corresponding utilities.    
