@@ -306,7 +306,7 @@ and establish the following additional conventions:
   is augmented with a `recover` function that similarly transforms exceptional cases. 
   A failure inside either `map` or `recover` transform aborts operation like a traditional function, 
   but `mapCatching` and `recoverCatching` encapsulate failure in transform into the resulting `Result`.
-* Functions to query the case are naturally named `isSuccess` and `isFailure`. 
+* To query the case, natural `is` operator is used: `is Success` or `is Failure`.
 * Functions that act on the success or failure cases are named `onSuccess` and `onFailure` and return their receiver
   unchanged for further chaining according to tradition established by `onEach` extension from the Standard Library.  
   
